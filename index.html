@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Crucigrama estilo sueco — Generador</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #f5f5f7;
+    color: #222;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  p.subtitle { margin: 0 0 20px; color: #666; font-size: 14px; }
+  .app { display: grid; grid-template-columns: 380px 1fr; gap: 20px; }
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr; } }
+  .panel {
+    background: white;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  textarea {
+    width: 100%;
+    height: 280px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 13px;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    resize: vertical;
+  }
+  .controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button {
+    padding: 8px 14px;
+    border: 1px solid #999;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.primary { background: #2563eb; color: white; border-color: #2563eb; }
+  button:hover { background: #f0f0f0; }
+  button.primary:hover { background: #1d4ed8; }
+  .hint { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.4; }
+  .status { margin-top: 10px; font-size: 13px; }
+  .status .ok { color: #16a34a; }
+  .status .warn { color: #d97706; }
+  #output { overflow: auto; }
+  #output svg { display: block; max-width: 100%; height: auto; background: white; }
+  .legend { margin-top: 16px; font-size: 12px; color: #555; }
+  .legend ul { margin: 4px 0 0 18px; padding: 0; }
+</style>
+</head>
+<body>
+  <h1>Generador de crucigramas estilo sueco</h1>
+  <p class="subtitle">Las pistas van dentro de la grilla, con flechas que apuntan a la respuesta.</p>
+
+  <div class="app">
+    <div class="panel">
+      <label for="input"><strong>Palabras y pistas</strong></label>
+      <div class="hint">Una por línea, formato <code>PALABRA | pista corta</code>. Las pistas largas no caben — usa 1‑3 palabras.</div>
+      <textarea id="input" spellcheck="false"></textarea>
+      <div class="controls">
+        <button class="primary" id="generate">Generar</button>
+        <button id="example">Cargar ejemplo</button>
+        <button id="download">Descargar SVG</button>
+      </div>
+      <div style="margin-top:10px;font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:6px;">
+          Filas
+          <input type="number" id="rows" min="5" max="40" value="20" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;">
+          Columnas
+          <input type="number" id="cols" min="5" max="40" value="20" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+        </label>
+      </div>
+      <div style="margin-top:8px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="fill" checked>
+          Rellenar huecos con palabras del banco (Wikcionario)
+        </label>
+      </div>
+      <div style="margin-top:8px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="solution" checked>
+          Mostrar solución (desmarcá para versión imprimible en blanco)
+        </label>
+      </div>
+      <div class="status" id="status"></div>
+      <div class="legend">
+        <strong>Cómo funciona:</strong>
+        <ul>
+          <li>Coloca tus palabras primero, cruzándolas entre sí.</li>
+          <li>Cada palabra reserva una celda‑pista a su izquierda (→) o arriba (↓).</li>
+          <li>Si dos pistas caen en la misma celda, se divide en diagonal.</li>
+          <li>Con el banco activado, rellena los huecos con palabras de Wikcionario español (~21.000) para que la grilla quede densa estilo "sueco".</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div id="output">
+        <p style="color:#888;">El crucigrama generado aparecerá aquí.</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+const CELL = 76;
+
+const EXAMPLE = `MEDIANO | No es grande ni pequeño
+LUNES | Día de la semana
+DESDEN | Indiferencia, desprecio
+CAPITULO | Parte de un libro
+MERCADO | Lugar para comprar
+PELOTA | Juguete
+FUNDIDO | Derretido
+NUMEROS | Dos, tres, cuatro...
+REJUVENECE | Se hace más joven
+ROSA | Flor con espinas
+NIDO | Hogar del ave
+SOL | Astro rey`;
+
+// ---------- Normalization ----------
+// NFD descompone Ñ en N + tilde combinante, así que protegemos Ñ con un
+// placeholder mientras se quitan los acentos del resto de las vocales.
+function normalizeWord(s) {
+  s = s.toUpperCase();
+  s = s.replace(/Ñ/g, '\u0001');
+  s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  s = s.replace(/\u0001/g, 'Ñ');
+  return s.replace(/[^A-ZÑ]/g, '');
+}
+
+function parseInput(text) {
+  const entries = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const parts = line.split('|');
+    if (parts.length < 2) continue;
+    const word = normalizeWord(parts[0]);
+    const clue = parts.slice(1).join('|').trim();
+    if (!word || !clue) continue;
+    entries.push({ word, clue });
+  }
+  return entries;
+}
+
+// ---------- Layout engine ----------
+function key(r, c) { return r + ',' + c; }
+
+function canPlace(letters, clues, word, row, col, dir, requireCrossing) {
+  let crossings = 0;
+  for (let i = 0; i < word.length; i++) {
+    const r = dir === 'H' ? row : row + i;
+    const c = dir === 'H' ? col + i : col;
+    const k = key(r, c);
+    // Cannot collide with a clue cell
+    if (clues.has(k)) return null;
+    const existing = letters.get(k);
+    if (existing !== undefined) {
+      if (existing !== word[i]) return null;
+      crossings++;
+    } else {
+      // adjacent perpendicular cells must be empty (so words don't run side by side)
+      if (dir === 'H') {
+        if (letters.has(key(r - 1, c))) return null;
+        if (letters.has(key(r + 1, c))) return null;
+      } else {
+        if (letters.has(key(r, c - 1))) return null;
+        if (letters.has(key(r, c + 1))) return null;
+      }
+    }
+  }
+  // before/after cells
+  const beforeR = dir === 'H' ? row : row - 1;
+  const beforeC = dir === 'H' ? col - 1 : col;
+  const afterR  = dir === 'H' ? row : row + word.length;
+  const afterC  = dir === 'H' ? col + word.length : col;
+  if (letters.has(key(afterR, afterC))) return null;
+  if (letters.has(key(beforeR, beforeC))) return null;
+  // clue cell cannot already host a clue with the same direction
+  const beforeKey = key(beforeR, beforeC);
+  if (clues.has(beforeKey)) {
+    if (clues.get(beforeKey).some(c => c.dir === dir)) return null;
+  }
+  if (requireCrossing && crossings === 0) return null;
+  return { crossings };
+}
+
+function placeWord(letters, clues, entry, row, col, dir, placed) {
+  const { word, clue } = entry;
+  for (let i = 0; i < word.length; i++) {
+    const r = dir === 'H' ? row : row + i;
+    const c = dir === 'H' ? col + i : col;
+    letters.set(key(r, c), word[i]);
+  }
+  const cr = dir === 'H' ? row : row - 1;
+  const cc = dir === 'H' ? col - 1 : col;
+  const k = key(cr, cc);
+  if (!clues.has(k)) clues.set(k, []);
+  clues.get(k).push({ clue, dir });
+  placed.push({ word, clue, row, col, dir });
+}
+
+function placementFitsBox(row, col, dir, wordLen, bx, cap) {
+  if (!cap) return true;
+  // El clue cell ocupa una celda antes del inicio
+  const r0 = dir === 'H' ? row : row - 1;
+  const c0 = dir === 'H' ? col - 1 : col;
+  const r1 = dir === 'H' ? row : row + wordLen - 1;
+  const c1 = dir === 'H' ? col + wordLen - 1 : col;
+  const newMinR = Math.min(bx.minR, r0);
+  const newMaxR = Math.max(bx.maxR, r1);
+  const newMinC = Math.min(bx.minC, c0);
+  const newMaxC = Math.max(bx.maxC, c1);
+  if (cap.rows && newMaxR - newMinR + 1 > cap.rows) return false;
+  if (cap.cols && newMaxC - newMinC + 1 > cap.cols) return false;
+  return true;
+}
+
+function updateBox(bx, row, col, dir, wordLen) {
+  const r0 = dir === 'H' ? row : row - 1;
+  const c0 = dir === 'H' ? col - 1 : col;
+  const r1 = dir === 'H' ? row : row + wordLen - 1;
+  const c1 = dir === 'H' ? col + wordLen - 1 : col;
+  bx.minR = Math.min(bx.minR, r0);
+  bx.maxR = Math.max(bx.maxR, r1);
+  bx.minC = Math.min(bx.minC, c0);
+  bx.maxC = Math.max(bx.maxC, c1);
+}
+
+function findBestPlacement(letters, clues, entry, bx, cap) {
+  const { word } = entry;
+  let best = null;
+  for (let i = 0; i < word.length; i++) {
+    const letter = word[i];
+    for (const [k, existing] of letters) {
+      if (existing !== letter) continue;
+      const [er, ec] = k.split(',').map(Number);
+      // Horizontal: word[i] sits at (er, ec) ⇒ start at (er, ec - i)
+      let res = canPlace(letters, clues, word, er, ec - i, 'H', true);
+      if (res && placementFitsBox(er, ec - i, 'H', word.length, bx, cap)
+            && (!best || res.crossings > best.crossings)) {
+        best = { row: er, col: ec - i, dir: 'H', crossings: res.crossings };
+      }
+      // Vertical
+      res = canPlace(letters, clues, word, er - i, ec, 'V', true);
+      if (res && placementFitsBox(er - i, ec, 'V', word.length, bx, cap)
+            && (!best || res.crossings > best.crossings)) {
+        best = { row: er - i, col: ec, dir: 'V', crossings: res.crossings };
+      }
+    }
+  }
+  return best;
+}
+
+function generate(entries, cap) {
+  if (entries.length === 0) return null;
+  // Prueba muchas órdenes y se queda con la más DENSA (letras por celda),
+  // no la más chica. Más palabras + mismo área = grilla más llena.
+  const candidates = [];
+  const tries = Math.min(80, Math.max(20, entries.length * 4));
+  for (let t = 0; t < tries; t++) {
+    const order = [...entries];
+    if (t === 0) {
+      order.sort((a, b) => b.word.length - a.word.length);
+    } else {
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+    }
+    const result = layoutWithOrder(order, cap);
+    candidates.push(result);
+  }
+  candidates.sort((a, b) => {
+    if (b.placed.length !== a.placed.length) return b.placed.length - a.placed.length;
+    const da = a.letters.size / a.area;
+    const db = b.letters.size / b.area;
+    if (db !== da) return db - da;
+    return a.area - b.area;
+  });
+  return candidates[0];
+}
+
+function layoutWithOrder(order, cap) {
+  const letters = new Map();
+  const clues = new Map();
+  const placed = [];
+  const skipped = [];
+  const bx = { minR: 0, maxR: 0, minC: -1, maxC: order[0].word.length - 1 };
+
+  // La primera palabra entra siempre (incluso si no respeta el cap),
+  // sino no hay layout. Si excede el cap, la grilla simplemente crecerá.
+  placeWord(letters, clues, order[0], 0, 0, 'H', placed);
+
+  for (let i = 1; i < order.length; i++) {
+    const p = findBestPlacement(letters, clues, order[i], bx, cap);
+    if (p) {
+      placeWord(letters, clues, order[i], p.row, p.col, p.dir, placed);
+      updateBox(bx, p.row, p.col, p.dir, order[i].word.length);
+    } else {
+      skipped.push(order[i]);
+    }
+  }
+  return computeBounds({ letters, clues, placed, skipped });
+}
+
+function computeBounds(result) {
+  let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+  const allKeys = [...result.letters.keys(), ...result.clues.keys()];
+  for (const k of allKeys) {
+    const [r, c] = k.split(',').map(Number);
+    if (r < minR) minR = r;
+    if (r > maxR) maxR = r;
+    if (c < minC) minC = c;
+    if (c > maxC) maxC = c;
+  }
+  result.minR = minR; result.maxR = maxR;
+  result.minC = minC; result.maxC = maxC;
+  result.rows = maxR - minR + 1;
+  result.cols = maxC - minC + 1;
+  result.area = result.rows * result.cols;
+  return result;
+}
+
+// ---------- Gap filling from bank ----------
+// Bank shape: { PALABRA: "pista corta" }. We build a length-indexed list.
+function indexBank(bank) {
+  const idx = {}; // length -> [{word, clue}]
+  for (const word in bank) {
+    const L = word.length;
+    if (L < 2 || L > 10) continue;
+    (idx[L] ??= []).push({ word, clue: bank[word] });
+  }
+  // Shuffle each bucket once so picks aren't alphabetic
+  for (const L in idx) {
+    const arr = idx[L];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+  return idx;
+}
+
+// Walk from (startR, startC) in dir, returning the max length we can place a
+// word AND the letter constraints we'd have to satisfy.
+function computeRun(result, startR, startC, dir, maxL) {
+  const { letters, clues } = result;
+  const pattern = [];
+  let maxLen = 0;
+  for (let i = 0; i < maxL; i++) {
+    const r = dir === 'H' ? startR : startR + i;
+    const c = dir === 'H' ? startC + i : startC;
+    const k = key(r, c);
+    if (clues.has(k)) break;
+    const existing = letters.get(k);
+    if (existing !== undefined) {
+      pattern.push([i, existing]);
+      maxLen = i + 1;
+    } else {
+      // perpendicular neighbors must be free of letters (no sideways touches)
+      const perpA = dir === 'H' ? key(r - 1, c) : key(r, c - 1);
+      const perpB = dir === 'H' ? key(r + 1, c) : key(r, c + 1);
+      if (letters.has(perpA) || letters.has(perpB)) break;
+      maxLen = i + 1;
+    }
+  }
+  return { maxLen, pattern };
+}
+
+function tryFillAt(result, bankIndex, clueR, clueC, dir, lenCap = 10) {
+  const { letters, clues, usedWords } = result;
+  const startR = dir === 'H' ? clueR : clueR + 1;
+  const startC = dir === 'H' ? clueC + 1 : clueC;
+  const startK = key(startR, startC);
+  // Una clue cell ya en la celda inicial impide arrancar (no hay letra ahí).
+  // PERO si la celda inicial es una LETRA existente, OK — la palabra nueva
+  // simplemente cruza esa letra (su primer carácter queda restringido).
+  if (clues.has(startK)) return false;
+  const { maxLen, pattern } = computeRun(result, startR, startC, dir, Math.min(10, lenCap));
+  if (maxLen < 2) return false;
+
+  // Try longest first
+  for (let L = maxLen; L >= 2; L--) {
+    // cell immediately after the word must not be a letter
+    const endR = dir === 'H' ? startR : startR + L;
+    const endC = dir === 'H' ? startC + L : startC;
+    if (letters.has(key(endR, endC))) continue;
+    const constraints = pattern.filter(([i]) => i < L);
+    const candidates = bankIndex[L];
+    if (!candidates) continue;
+    for (const { word, clue } of candidates) {
+      if (usedWords.has(word)) continue;
+      let ok = true;
+      for (const [i, ch] of constraints) {
+        if (word[i] !== ch) { ok = false; break; }
+      }
+      if (!ok) continue;
+      placeWord(letters, clues, { word, clue }, startR, startC, dir, result.placed);
+      usedWords.add(word);
+      return true;
+    }
+  }
+  return false;
+}
+
+function fillGaps(result, bankIndex, opts = {}) {
+  result.usedWords ??= new Set(result.placed.map(p => p.word));
+  const maxPasses = opts.maxPasses ?? 3;
+  computeBounds(result);
+  const padding = opts.padding ?? 1;
+
+  let r0, r1, c0, c1;
+  if (opts.targetRows) {
+    // Centrar la caja objetivo alrededor del centro del layout del usuario
+    const midR = (result.minR + result.maxR) / 2;
+    r0 = Math.round(midR - opts.targetRows / 2 + 0.5);
+    r1 = r0 + opts.targetRows - 1;
+    // Si el layout ya excede el objetivo, expandir para contenerlo
+    if (r0 > result.minR) { r1 -= (r0 - result.minR); r0 = result.minR; }
+    if (r1 < result.maxR) { r0 += (result.maxR - r1); r1 = result.maxR; }
+  } else {
+    r0 = result.minR - padding; r1 = result.maxR + padding;
+  }
+  if (opts.targetCols) {
+    const midC = (result.minC + result.maxC) / 2;
+    c0 = Math.round(midC - opts.targetCols / 2 + 0.5);
+    c1 = c0 + opts.targetCols - 1;
+    if (c0 > result.minC) { c1 -= (c0 - result.minC); c0 = result.minC; }
+    if (c1 < result.maxC) { c0 += (result.maxC - c1); c1 = result.maxC; }
+  } else {
+    c0 = result.minC - padding; c1 = result.maxC + padding;
+  }
+  let added = 0;
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let placedAny = false;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const k = key(r, c);
+        // Skip letter cells outright; allow clue cells if they only host
+        // the opposite direction (cell can carry both H and V clues split
+        // diagonally, like in the reference image).
+        if (result.letters.has(k)) continue;
+        const existing = result.clues.get(k);
+        const hasH = existing && existing.some(c => c.dir === 'H');
+        const hasV = existing && existing.some(c => c.dir === 'V');
+        const capH = c1 - c;
+        const capV = r1 - r;
+        if (!hasH && capH >= 2 && tryFillAt(result, bankIndex, r, c, 'H', capH)) { placedAny = true; added++; continue; }
+        if (!hasV && capV >= 2 && tryFillAt(result, bankIndex, r, c, 'V', capV)) { placedAny = true; added++; }
+      }
+    }
+    if (!placedAny) break;
+  }
+  computeBounds(result);
+  // Si fijamos un target, mantener esos bounds aunque queden filas/columnas
+  // vacías a los costados — para que la grilla rendereada tenga el tamaño pedido.
+  if (opts.targetRows || opts.targetCols) {
+    result.minR = Math.min(result.minR, r0);
+    result.maxR = Math.max(result.maxR, r1);
+    result.minC = Math.min(result.minC, c0);
+    result.maxC = Math.max(result.maxC, c1);
+    result.rows = result.maxR - result.minR + 1;
+    result.cols = result.maxC - result.minC + 1;
+    result.area = result.rows * result.cols;
+  }
+  result.bankAdded = (result.bankAdded || 0) + added;
+  return result;
+}
+
+// ---------- Dense (pattern-first) generator ----------
+// Diseña primero el patrón de celdas (letra vs pista) y luego busca palabras
+// del banco que encajen en cada slot. Cuando converge, deja la grilla casi
+// 100% llena estilo "sueco".
+
+// 1) Pattern. cellGrid[r][c] = 'C' (clue cell) | letter | null (letter slot vacío)
+//    Estrategia: clues escalonadas con offset por fila para que los slots
+//    horizontales midan 3‑6 y los verticales también queden en ese rango.
+function buildDensePattern(R, C, step = 5, rowOffset = 3) {
+  const STEP = step;
+  const ROW_OFFSET = rowOffset;
+  const g = Array.from({ length: R }, () => Array(C).fill(null));
+  for (let r = 0; r < R; r++) {
+    const base = (r * ROW_OFFSET) % STEP;
+    // clue cells en esta fila
+    for (let c = 0; c < C; c++) {
+      if ((c + STEP - base) % STEP === 0) g[r][c] = 'C';
+    }
+    // forzar clue en la primera columna si no la hay,
+    // para que toda fila empiece con clue o con borde
+    if (g[r][0] !== 'C' && r === 0) g[r][0] = 'C';
+  }
+  // Limpieza: una celda de letra debe pertenecer al menos a un slot válido.
+  // Un slot es válido cuando tiene longitud >= 2 Y existe una celda C antes
+  // del inicio. Las celdas L que no cumplen esto en ninguna dirección se
+  // convierten en C.
+  let changed = true, safety = 50;
+  while (changed && safety-- > 0) {
+    changed = false;
+    for (let r = 0; r < R; r++) {
+      for (let c = 0; c < C; c++) {
+        if (g[r][c] === 'C') continue;
+        // ¿Pertenece a un slot H válido?
+        let hStart = c, hEnd = c;
+        while (hStart > 0 && g[r][hStart - 1] !== 'C') hStart--;
+        while (hEnd < C - 1 && g[r][hEnd + 1] !== 'C') hEnd++;
+        const hLen = hEnd - hStart + 1;
+        const hHasClue = hStart - 1 >= 0 && g[r][hStart - 1] === 'C';
+        const hValid = hLen >= 2 && hHasClue;
+        // ¿Pertenece a un slot V válido?
+        let vStart = r, vEnd = r;
+        while (vStart > 0 && g[vStart - 1][c] !== 'C') vStart--;
+        while (vEnd < R - 1 && g[vEnd + 1][c] !== 'C') vEnd++;
+        const vLen = vEnd - vStart + 1;
+        const vHasClue = vStart - 1 >= 0 && g[vStart - 1][c] === 'C';
+        const vValid = vLen >= 2 && vHasClue;
+        if (!hValid && !vValid) { g[r][c] = 'C'; changed = true; }
+      }
+    }
+  }
+  return g;
+}
+
+// 2) Slot extraction. Un slot es una corrida de celdas de letra de longitud
+//    >= 2 precedida por una clue cell (que es donde va la pista). Slots que
+//    empiezan en row 0 / col 0 quedan descartados porque no hay celda para
+//    poner la pista.
+function extractSlots(pattern) {
+  const R = pattern.length, C = pattern[0].length;
+  const slots = [];
+  for (let r = 0; r < R; r++) {
+    let c = 0;
+    while (c < C) {
+      if (pattern[r][c] === 'C') { c++; continue; }
+      const start = c;
+      while (c < C && pattern[r][c] !== 'C') c++;
+      const len = c - start;
+      // Requiere una celda C inmediatamente a la izquierda
+      if (len >= 2 && start - 1 >= 0 && pattern[r][start - 1] === 'C') {
+        slots.push({ dir: 'H', r, c: start, len });
+      }
+    }
+  }
+  for (let c = 0; c < C; c++) {
+    let r = 0;
+    while (r < R) {
+      if (pattern[r][c] === 'C') { r++; continue; }
+      const start = r;
+      while (r < R && pattern[r][c] !== 'C') r++;
+      const len = r - start;
+      if (len >= 2 && start - 1 >= 0 && pattern[start - 1][c] === 'C') {
+        slots.push({ dir: 'V', r: start, c, len });
+      }
+    }
+  }
+  return slots;
+}
+
+// 3) Build letter index for fast pattern matching.
+//    letterIndex[len][pos][letter] = Set<word>
+function buildLetterIndex(bankObj) {
+  const byLen = {}, idx = {};
+  for (const word in bankObj) {
+    const L = word.length;
+    if (L < 2 || L > 10) continue;
+    (byLen[L] ??= []).push(word);
+    idx[L] ??= [];
+    for (let i = 0; i < L; i++) {
+      idx[L][i] ??= {};
+      (idx[L][i][word[i]] ??= new Set()).add(word);
+    }
+  }
+  return { byLen, idx };
+}
+
+function intersectSets(sets) {
+  if (sets.length === 0) return null;
+  sets.sort((a, b) => a.size - b.size);
+  const result = new Set();
+  for (const w of sets[0]) {
+    let ok = true;
+    for (let i = 1; i < sets.length; i++) {
+      if (!sets[i].has(w)) { ok = false; break; }
+    }
+    if (ok) result.add(w);
+  }
+  return result;
+}
+
+function candidatesForSlot(slot, cells, letterIndex) {
+  const { byLen, idx } = letterIndex;
+  const sets = [];
+  for (let i = 0; i < slot.len; i++) {
+    const r = slot.dir === 'H' ? slot.r : slot.r + i;
+    const c = slot.dir === 'H' ? slot.c + i : slot.c;
+    const v = cells[r][c];
+    if (v !== null) {
+      const s = (idx[slot.len]?.[i] || {})[v];
+      if (!s) return [];
+      sets.push(s);
+    }
+  }
+  if (sets.length === 0) return byLen[slot.len] ? [...byLen[slot.len]] : [];
+  const inter = intersectSets(sets);
+  return inter ? [...inter] : [];
+}
+
+// 4) Backtracking solver con MRV + forward-checking liviano.
+//    Idea: tras colocar una palabra, revisamos que los slots vecinos
+//    (los que tocan las celdas modificadas) sigan teniendo al menos un
+//    candidato. Si alguno cae a 0, abortamos esa rama de inmediato.
+function solveDense(slots, cells, letterIndex, opts = {}) {
+  const used = new Set(opts.used || []);
+  const deadline = (opts.maxMs || 4000) + Date.now();
+
+  // Pre-índice celda → slots que la cruzan, sólo para los slots a resolver
+  const slotsByCell = new Map();
+  for (const slot of slots) {
+    for (let i = 0; i < slot.len; i++) {
+      const r = slot.dir === 'H' ? slot.r : slot.r + i;
+      const c = slot.dir === 'H' ? slot.c + i : slot.c;
+      const k = `${r},${c}`;
+      if (!slotsByCell.has(k)) slotsByCell.set(k, []);
+      slotsByCell.get(k).push(slot);
+    }
+  }
+
+  function recur(remaining) {
+    if (remaining.length === 0) return true;
+    if (Date.now() > deadline) return false;
+    // MRV
+    let bestI = 0, bestCands = null, bestCount = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const cands = candidatesForSlot(remaining[i], cells, letterIndex)
+                      .filter(w => !used.has(w));
+      if (cands.length < bestCount) {
+        bestCount = cands.length;
+        bestI = i;
+        bestCands = cands;
+        if (bestCount === 0) break;
+      }
+    }
+    if (bestCount === 0) return false;
+    const slot = remaining[bestI];
+    const rest = remaining.slice(0, bestI).concat(remaining.slice(bestI + 1));
+    for (let i = bestCands.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [bestCands[i], bestCands[j]] = [bestCands[j], bestCands[i]];
+    }
+    const saved = [];
+    for (const word of bestCands) {
+      saved.length = 0;
+      let conflict = false;
+      const changedCells = [];
+      for (let i = 0; i < slot.len; i++) {
+        const r = slot.dir === 'H' ? slot.r : slot.r + i;
+        const c = slot.dir === 'H' ? slot.c + i : slot.c;
+        const prev = cells[r][c];
+        if (prev !== null && prev !== word[i]) { conflict = true; break; }
+        saved.push([r, c, prev]);
+        if (prev === null) changedCells.push([r, c]);
+        cells[r][c] = word[i];
+      }
+      if (!conflict) {
+        // Forward check: para cada celda nueva, los slots cruzados deben
+        // mantener al menos un candidato.
+        let dead = false;
+        outer: for (const [r, c] of changedCells) {
+          const xs = slotsByCell.get(`${r},${c}`) || [];
+          for (const xslot of xs) {
+            if (xslot === slot || xslot.solution) continue;
+            const c2 = candidatesForSlot(xslot, cells, letterIndex);
+            // No filtramos por `used` aquí — sólo necesitamos UNO disponible
+            let any = false;
+            for (const w2 of c2) { if (!used.has(w2)) { any = true; break; } }
+            if (!any) { dead = true; break outer; }
+          }
+        }
+        if (!dead) {
+          used.add(word);
+          slot.solution = word;
+          if (recur(rest)) return true;
+          used.delete(word);
+          slot.solution = null;
+        }
+      }
+      for (const [r, c, v] of saved) cells[r][c] = v;
+    }
+    return false;
+  }
+  return recur(slots.slice());
+}
+
+// 5) Convertir resultado del solver al formato (letters, clues) estándar
+//    para que use el mismo renderer.
+function denseResultToShape(pattern, slots, cells, bankMap) {
+  const R = pattern.length, C = pattern[0].length;
+  const letters = new Map();
+  const clues = new Map();
+  const placed = [];
+  // Letras
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      if (pattern[r][c] !== 'C' && cells[r][c]) {
+        letters.set(`${r},${c}`, cells[r][c]);
+      }
+    }
+  }
+  // Slots → clue cells (la celda inmediatamente antes del slot)
+  for (const slot of slots) {
+    if (!slot.solution) continue;
+    const cr = slot.dir === 'H' ? slot.r : slot.r - 1;
+    const cc = slot.dir === 'H' ? slot.c - 1 : slot.c;
+    const k = `${cr},${cc}`;
+    if (cr < 0 || cc < 0) continue; // borde del grid: no hay donde poner clue
+    if (!clues.has(k)) clues.set(k, []);
+    clues.get(k).push({ clue: bankMap[slot.solution] || '?', dir: slot.dir });
+    placed.push({ word: slot.solution, clue: bankMap[slot.solution] || '?', row: slot.r, col: slot.c, dir: slot.dir });
+  }
+  return computeBounds({ letters, clues, placed, skipped: [] });
+}
+
+function generateDense(entries, opts) {
+  const R = opts.rows, C = opts.cols;
+  const bankMap = Object.assign({}, opts.bankCore || {}, opts.bankExtra || {});
+  // Sumar las palabras del usuario al map (con sus pistas)
+  for (const e of entries) bankMap[e.word] = e.clue;
+  const letterIndex = buildLetterIndex(bankMap);
+
+  // Probar varias plantillas. Steps mayores generan slots más largos
+  // (slots ≈ step-1 letras). step=5 → slots 4, step=6 → 5, etc.
+  // Si el usuario tiene palabras largas, priorizamos plantillas que
+  // generan slots de su longitud.
+  const userMaxLen = entries.reduce((m, e) => Math.max(m, e.word.length), 0);
+  // Generar variantes cubriendo steps de 4 a max(8, userMaxLen+2) — el step
+  // determina la longitud máxima de slot (step-1).
+  const maxStep = Math.max(8, userMaxLen + 2);
+  const allVariants = [];
+  for (let step = 4; step <= maxStep; step++) {
+    for (let off = 1; off < step; off++) allVariants.push({ step, off });
+  }
+  // Patrones que acomodan al menos la palabra más larga primero.
+  const variants = allVariants.slice().sort((a, b) => {
+    const aOk = a.step - 1 >= userMaxLen ? 0 : 1;
+    const bOk = b.step - 1 >= userMaxLen ? 0 : 1;
+    if (aOk !== bOk) return aOk - bOk;
+    return a.step - b.step;
+  });
+  const userEntries = entries.filter(e => e.word.length >= 2 && e.word.length <= 10);
+
+  for (const v of variants) {
+    const pattern = buildDensePattern(R, C, v.step, v.off);
+    const slots = extractSlots(pattern);
+    if (slots.length === 0) continue;
+    if (slots.some(s => s.len > 10)) continue;
+
+    // Verificar capacidad mínima por longitud: para cada longitud requerida
+    // por el usuario, debe haber al menos tantos slots como palabras.
+    const need = {};
+    for (const e of userEntries) need[e.word.length] = (need[e.word.length] || 0) + 1;
+    let ok = true;
+    for (const L in need) {
+      const avail = slots.filter(s => s.len === parseInt(L, 10)).length;
+      if (avail < need[L]) { ok = false; break; }
+    }
+    if (!ok) continue;
+
+    // Hacer varios reintentos por variante con asignaciones aleatorias
+    // distintas — a veces la PRIMERA disposición de las palabras del
+    // usuario hace inviable el bank-fill posterior.
+    const maxRetries = 6;
+    for (let retry = 0; retry < maxRetries; retry++) {
+      for (const slot of slots) slot.solution = null;
+      const cells = Array.from({ length: R }, () => Array(C).fill(null));
+      if (!assignUserWords(userEntries, slots, cells)) break; // no es viable en este patrón
+      const usedUser = slots.filter(s => s.solution).map(s => s.solution);
+      const unsolved = slots.filter(s => !s.solution);
+      if (solveDense(unsolved, cells, letterIndex, { used: usedUser, maxMs: 4000 })) {
+        return denseResultToShape(pattern, slots, cells, bankMap);
+      }
+    }
+  }
+  return null;
+}
+
+// Backtracking sobre el conjunto de palabras del usuario: cada palabra
+// debe entrar en algún slot de su misma longitud, sin chocar con otras
+// ya asignadas (a través de crossings).
+function assignUserWords(userEntries, slots, cells) {
+  // Ordenar de más largas a más cortas (menos opciones → fail fast)
+  const sorted = userEntries.slice().sort((a, b) => b.word.length - a.word.length);
+  function tryAt(idx) {
+    if (idx === sorted.length) return true;
+    const e = sorted[idx];
+    const candSlots = slots.filter(s => !s.solution && s.len === e.word.length);
+    // Mezclar para variedad entre intentos
+    for (let i = candSlots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candSlots[i], candSlots[j]] = [candSlots[j], candSlots[i]];
+    }
+    for (const slot of candSlots) {
+      const saved = [];
+      let conflict = false;
+      for (let i = 0; i < slot.len; i++) {
+        const r = slot.dir === 'H' ? slot.r : slot.r + i;
+        const c = slot.dir === 'H' ? slot.c + i : slot.c;
+        const prev = cells[r][c];
+        if (prev !== null && prev !== e.word[i]) { conflict = true; break; }
+        saved.push([r, c, prev]);
+        cells[r][c] = e.word[i];
+      }
+      if (!conflict) {
+        slot.solution = e.word;
+        if (tryAt(idx + 1)) return true;
+        slot.solution = null;
+      }
+      for (const [r, c, v] of saved) cells[r][c] = v;
+    }
+    return false;
+  }
+  return tryAt(0);
+}
+
+// ---------- Rendering ----------
+function escapeXml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+function clueFontSize(clue) {
+  const len = clue.length;
+  if (len <= 8) return 12;
+  if (len <= 14) return 11;
+  if (len <= 22) return 9;
+  return 8;
+}
+
+// Iconos vectoriales sencillos para decorar algunos huecos grises.
+// Cada función devuelve un fragmento SVG centrado en (cx, cy) con tamaño s.
+const ICON_PALETTE = [
+  // 1. estrella amarilla
+  (cx, cy, s) => `<path d="M ${cx} ${cy-s*0.45} L ${cx+s*0.14} ${cy-s*0.14} L ${cx+s*0.46} ${cy-s*0.14} L ${cx+s*0.20} ${cy+s*0.06} L ${cx+s*0.30} ${cy+s*0.40} L ${cx} ${cy+s*0.20} L ${cx-s*0.30} ${cy+s*0.40} L ${cx-s*0.20} ${cy+s*0.06} L ${cx-s*0.46} ${cy-s*0.14} L ${cx-s*0.14} ${cy-s*0.14} Z" fill="#fbbf24" stroke="#b45309" stroke-width="1.5"/>`,
+  // 2. corazón rojo
+  (cx, cy, s) => `<path d="M ${cx} ${cy+s*0.40} C ${cx-s*0.55} ${cy+s*0.05}, ${cx-s*0.55} ${cy-s*0.30}, ${cx-s*0.20} ${cy-s*0.30} C ${cx-s*0.05} ${cy-s*0.30}, ${cx} ${cy-s*0.12}, ${cx} ${cy-s*0.05} C ${cx} ${cy-s*0.12}, ${cx+s*0.05} ${cy-s*0.30}, ${cx+s*0.20} ${cy-s*0.30} C ${cx+s*0.55} ${cy-s*0.30}, ${cx+s*0.55} ${cy+s*0.05}, ${cx} ${cy+s*0.40} Z" fill="#ef4444" stroke="#991b1b" stroke-width="1.5"/>`,
+  // 3. sol naranja
+  (cx, cy, s) => {
+    let out = `<circle cx="${cx}" cy="${cy}" r="${s*0.22}" fill="#fb923c" stroke="#9a3412" stroke-width="1.5"/>`;
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4;
+      const x1 = cx + Math.cos(a) * s * 0.30, y1 = cy + Math.sin(a) * s * 0.30;
+      const x2 = cx + Math.cos(a) * s * 0.44, y2 = cy + Math.sin(a) * s * 0.44;
+      out += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fb923c" stroke-width="3" stroke-linecap="round"/>`;
+    }
+    return out;
+  },
+  // 4. flor rosa
+  (cx, cy, s) => {
+    let out = '';
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3;
+      const px = cx + Math.cos(a) * s * 0.22, py = cy + Math.sin(a) * s * 0.22;
+      out += `<circle cx="${px}" cy="${py}" r="${s*0.16}" fill="#ec4899" stroke="#9d174d" stroke-width="1.2"/>`;
+    }
+    out += `<circle cx="${cx}" cy="${cy}" r="${s*0.13}" fill="#fde047" stroke="#a16207" stroke-width="1.2"/>`;
+    return out;
+  },
+  // 5. hoja verde
+  (cx, cy, s) => `<path d="M ${cx-s*0.30} ${cy+s*0.30} Q ${cx-s*0.10} ${cy-s*0.40} ${cx+s*0.35} ${cy-s*0.30} Q ${cx+s*0.10} ${cy+s*0.35} ${cx-s*0.30} ${cy+s*0.30} Z" fill="#22c55e" stroke="#14532d" stroke-width="1.5"/><line x1="${cx-s*0.20}" y1="${cy+s*0.25}" x2="${cx+s*0.15}" y2="${cy-s*0.10}" stroke="#14532d" stroke-width="1.2"/>`,
+  // 6. rayo
+  (cx, cy, s) => `<path d="M ${cx-s*0.05} ${cy-s*0.40} L ${cx-s*0.30} ${cy+s*0.05} L ${cx-s*0.05} ${cy+s*0.05} L ${cx-s*0.20} ${cy+s*0.40} L ${cx+s*0.30} ${cy-s*0.05} L ${cx+s*0.05} ${cy-s*0.05} L ${cx+s*0.15} ${cy-s*0.40} Z" fill="#3b82f6" stroke="#1e3a8a" stroke-width="1.5"/>`,
+  // 7. luna
+  (cx, cy, s) => `<path d="M ${cx+s*0.10} ${cy-s*0.36} A ${s*0.36} ${s*0.36} 0 1 0 ${cx+s*0.10} ${cy+s*0.36} A ${s*0.28} ${s*0.28} 0 1 1 ${cx+s*0.10} ${cy-s*0.36} Z" fill="#a78bfa" stroke="#4c1d95" stroke-width="1.5"/>`,
+  // 8. gota
+  (cx, cy, s) => `<path d="M ${cx} ${cy-s*0.40} C ${cx+s*0.30} ${cy-s*0.05}, ${cx+s*0.30} ${cy+s*0.30}, ${cx} ${cy+s*0.36} C ${cx-s*0.30} ${cy+s*0.30}, ${cx-s*0.30} ${cy-s*0.05}, ${cx} ${cy-s*0.40} Z" fill="#06b6d4" stroke="#155e75" stroke-width="1.5"/>`,
+  // 9. trébol
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy-s*0.18}" r="${s*0.16}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<circle cx="${cx-s*0.18}" cy="${cy}" r="${s*0.16}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<circle cx="${cx+s*0.18}" cy="${cy}" r="${s*0.16}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<circle cx="${cx}" cy="${cy+s*0.18}" r="${s*0.16}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<line x1="${cx}" y1="${cy+s*0.18}" x2="${cx}" y2="${cy+s*0.42}" stroke="#14532d" stroke-width="2"/>`,
+  // 10. manzana
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy+s*0.05}" r="${s*0.30}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1.5"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.22}" x2="${cx}" y2="${cy-s*0.32}" stroke="#451a03" stroke-width="2"/>` +
+    `<ellipse cx="${cx+s*0.10}" cy="${cy-s*0.28}" rx="${s*0.10}" ry="${s*0.05}" fill="#22c55e" stroke="#14532d" stroke-width="1" transform="rotate(30 ${cx+s*0.10} ${cy-s*0.28})"/>`,
+  // 11. pez
+  (cx, cy, s) =>
+    `<ellipse cx="${cx-s*0.05}" cy="${cy}" rx="${s*0.30}" ry="${s*0.18}" fill="#0ea5e9" stroke="#0c4a6e" stroke-width="1.5"/>` +
+    `<polygon points="${cx+s*0.22},${cy} ${cx+s*0.42},${cy-s*0.16} ${cx+s*0.42},${cy+s*0.16}" fill="#0ea5e9" stroke="#0c4a6e" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.20}" cy="${cy-s*0.04}" r="${s*0.04}" fill="white" stroke="#0c4a6e" stroke-width="1"/>` +
+    `<circle cx="${cx-s*0.19}" cy="${cy-s*0.04}" r="${s*0.02}" fill="#0c4a6e"/>`,
+  // 12. mariposa
+  (cx, cy, s) =>
+    `<ellipse cx="${cx-s*0.18}" cy="${cy-s*0.10}" rx="${s*0.18}" ry="${s*0.16}" fill="#a855f7" stroke="#581c87" stroke-width="1.2"/>` +
+    `<ellipse cx="${cx+s*0.18}" cy="${cy-s*0.10}" rx="${s*0.18}" ry="${s*0.16}" fill="#a855f7" stroke="#581c87" stroke-width="1.2"/>` +
+    `<ellipse cx="${cx-s*0.15}" cy="${cy+s*0.16}" rx="${s*0.14}" ry="${s*0.13}" fill="#a855f7" stroke="#581c87" stroke-width="1.2"/>` +
+    `<ellipse cx="${cx+s*0.15}" cy="${cy+s*0.16}" rx="${s*0.14}" ry="${s*0.13}" fill="#a855f7" stroke="#581c87" stroke-width="1.2"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.22}" x2="${cx}" y2="${cy+s*0.28}" stroke="#581c87" stroke-width="2.5"/>`,
+  // 13. diamante
+  (cx, cy, s) =>
+    `<polygon points="${cx},${cy-s*0.35} ${cx+s*0.30},${cy} ${cx},${cy+s*0.38} ${cx-s*0.30},${cy}" fill="#06b6d4" stroke="#155e75" stroke-width="1.5"/>` +
+    `<line x1="${cx-s*0.30}" y1="${cy}" x2="${cx+s*0.30}" y2="${cy}" stroke="#155e75" stroke-width="1"/>` +
+    `<line x1="${cx-s*0.15}" y1="${cy-s*0.18}" x2="${cx+s*0.15}" y2="${cy-s*0.18}" stroke="#155e75" stroke-width="0.8"/>`,
+  // 14. paraguas
+  (cx, cy, s) =>
+    `<path d="M ${cx-s*0.38} ${cy-s*0.02} A ${s*0.38} ${s*0.38} 0 0 1 ${cx+s*0.38} ${cy-s*0.02} Z" fill="#ef4444" stroke="#7f1d1d" stroke-width="1.5"/>` +
+    `<line x1="${cx-s*0.20}" y1="${cy-s*0.02}" x2="${cx-s*0.20}" y2="${cy-s*0.18}" stroke="#7f1d1d" stroke-width="1"/>` +
+    `<line x1="${cx+s*0.20}" y1="${cy-s*0.02}" x2="${cx+s*0.20}" y2="${cy-s*0.18}" stroke="#7f1d1d" stroke-width="1"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.02}" x2="${cx}" y2="${cy+s*0.35}" stroke="#7f1d1d" stroke-width="2.5"/>` +
+    `<path d="M ${cx} ${cy+s*0.35} Q ${cx-s*0.10} ${cy+s*0.45} ${cx-s*0.18} ${cy+s*0.40}" fill="none" stroke="#7f1d1d" stroke-width="2.5"/>`,
+  // 15. globo
+  (cx, cy, s) =>
+    `<ellipse cx="${cx}" cy="${cy-s*0.10}" rx="${s*0.22}" ry="${s*0.27}" fill="#f43f5e" stroke="#881337" stroke-width="1.5"/>` +
+    `<polygon points="${cx-s*0.05},${cy+s*0.18} ${cx+s*0.05},${cy+s*0.18} ${cx},${cy+s*0.25}" fill="#881337"/>` +
+    `<path d="M ${cx} ${cy+s*0.25} Q ${cx-s*0.06} ${cy+s*0.32} ${cx} ${cy+s*0.40} Q ${cx+s*0.06} ${cy+s*0.46} ${cx-s*0.03} ${cy+s*0.50}" fill="none" stroke="#881337" stroke-width="1.2"/>`,
+  // 16. regalo
+  (cx, cy, s) =>
+    `<rect x="${cx-s*0.28}" y="${cy-s*0.10}" width="${s*0.56}" height="${s*0.42}" fill="#3b82f6" stroke="#1e3a8a" stroke-width="1.5"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.10}" x2="${cx}" y2="${cy+s*0.32}" stroke="#facc15" stroke-width="3"/>` +
+    `<line x1="${cx-s*0.28}" y1="${cy+s*0.11}" x2="${cx+s*0.28}" y2="${cy+s*0.11}" stroke="#facc15" stroke-width="3"/>` +
+    `<path d="M ${cx-s*0.12} ${cy-s*0.10} Q ${cx-s*0.20} ${cy-s*0.28} ${cx} ${cy-s*0.10} Q ${cx+s*0.20} ${cy-s*0.28} ${cx+s*0.12} ${cy-s*0.10} Z" fill="#facc15" stroke="#a16207" stroke-width="1.2"/>`,
+  // 17. nota musical
+  (cx, cy, s) =>
+    `<ellipse cx="${cx-s*0.12}" cy="${cy+s*0.22}" rx="${s*0.13}" ry="${s*0.10}" fill="#7c3aed" stroke="#3b0764" stroke-width="1.5"/>` +
+    `<line x1="${cx}" y1="${cy+s*0.22}" x2="${cx}" y2="${cy-s*0.32}" stroke="#3b0764" stroke-width="3"/>` +
+    `<path d="M ${cx} ${cy-s*0.32} Q ${cx+s*0.22} ${cy-s*0.20} ${cx+s*0.20} ${cy-s*0.05}" fill="none" stroke="#3b0764" stroke-width="3"/>`,
+  // 18. copa
+  (cx, cy, s) =>
+    `<path d="M ${cx-s*0.22} ${cy-s*0.28} L ${cx+s*0.22} ${cy-s*0.28} L ${cx+s*0.16} ${cy+s*0.10} L ${cx-s*0.16} ${cy+s*0.10} Z" fill="#ea580c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<line x1="${cx}" y1="${cy+s*0.10}" x2="${cx}" y2="${cy+s*0.30}" stroke="#7c2d12" stroke-width="2"/>` +
+    `<line x1="${cx-s*0.16}" y1="${cy+s*0.30}" x2="${cx+s*0.16}" y2="${cy+s*0.30}" stroke="#7c2d12" stroke-width="2"/>`,
+  // 19. árbol pino
+  (cx, cy, s) =>
+    `<polygon points="${cx},${cy-s*0.42} ${cx-s*0.20},${cy-s*0.10} ${cx+s*0.20},${cy-s*0.10}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<polygon points="${cx},${cy-s*0.25} ${cx-s*0.25},${cy+s*0.10} ${cx+s*0.25},${cy+s*0.10}" fill="#16a34a" stroke="#14532d" stroke-width="1.2"/>` +
+    `<rect x="${cx-s*0.05}" y="${cy+s*0.10}" width="${s*0.10}" height="${s*0.20}" fill="#78350f" stroke="#451a03" stroke-width="1"/>`,
+  // 20. nube
+  (cx, cy, s) =>
+    `<ellipse cx="${cx-s*0.16}" cy="${cy+s*0.05}" rx="${s*0.18}" ry="${s*0.14}" fill="#cbd5e1" stroke="#334155" stroke-width="1.5"/>` +
+    `<ellipse cx="${cx+s*0.12}" cy="${cy+s*0.05}" rx="${s*0.20}" ry="${s*0.16}" fill="#cbd5e1" stroke="#334155" stroke-width="1.5"/>` +
+    `<ellipse cx="${cx-s*0.02}" cy="${cy-s*0.12}" rx="${s*0.20}" ry="${s*0.16}" fill="#cbd5e1" stroke="#334155" stroke-width="1.5"/>`,
+  // 21. casa
+  (cx, cy, s) =>
+    `<polygon points="${cx-s*0.32},${cy-s*0.05} ${cx},${cy-s*0.38} ${cx+s*0.32},${cy-s*0.05}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1.5"/>` +
+    `<rect x="${cx-s*0.26}" y="${cy-s*0.05}" width="${s*0.52}" height="${s*0.38}" fill="#fbbf24" stroke="#78350f" stroke-width="1.5"/>` +
+    `<rect x="${cx-s*0.08}" y="${cy+s*0.08}" width="${s*0.16}" height="${s*0.25}" fill="#78350f"/>`,
+  // 22. cohete
+  (cx, cy, s) =>
+    `<path d="M ${cx} ${cy-s*0.42} L ${cx-s*0.15} ${cy-s*0.02} L ${cx-s*0.15} ${cy+s*0.20} L ${cx+s*0.15} ${cy+s*0.20} L ${cx+s*0.15} ${cy-s*0.02} Z" fill="#ef4444" stroke="#7f1d1d" stroke-width="1.5"/>` +
+    `<circle cx="${cx}" cy="${cy-s*0.10}" r="${s*0.07}" fill="#fef3c7" stroke="#7c2d12" stroke-width="1.2"/>` +
+    `<polygon points="${cx-s*0.15},${cy+s*0.05} ${cx-s*0.30},${cy+s*0.22} ${cx-s*0.15},${cy+s*0.22}" fill="#b91c1c"/>` +
+    `<polygon points="${cx+s*0.15},${cy+s*0.05} ${cx+s*0.30},${cy+s*0.22} ${cx+s*0.15},${cy+s*0.22}" fill="#b91c1c"/>` +
+    `<path d="M ${cx-s*0.06} ${cy+s*0.20} L ${cx-s*0.08} ${cy+s*0.36} M ${cx} ${cy+s*0.20} L ${cx} ${cy+s*0.42} M ${cx+s*0.06} ${cy+s*0.20} L ${cx+s*0.08} ${cy+s*0.36}" stroke="#f97316" stroke-width="2.5" stroke-linecap="round"/>`,
+  // 23. paleta (lollipop)
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy-s*0.12}" r="${s*0.24}" fill="#f472b6" stroke="#831843" stroke-width="1.5"/>` +
+    `<path d="M ${cx-s*0.18} ${cy-s*0.20} Q ${cx-s*0.05} ${cy-s*0.30} ${cx+s*0.05} ${cy-s*0.18} Q ${cx+s*0.18} ${cy-s*0.05} ${cx+s*0.08} ${cy+s*0.05}" fill="none" stroke="#fde047" stroke-width="2.5"/>` +
+    `<line x1="${cx}" y1="${cy+s*0.12}" x2="${cx}" y2="${cy+s*0.42}" stroke="#78350f" stroke-width="3"/>`,
+  // 24. smiley
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy}" r="${s*0.36}" fill="#fde047" stroke="#a16207" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.13}" cy="${cy-s*0.08}" r="${s*0.04}" fill="#451a03"/>` +
+    `<circle cx="${cx+s*0.13}" cy="${cy-s*0.08}" r="${s*0.04}" fill="#451a03"/>` +
+    `<path d="M ${cx-s*0.16} ${cy+s*0.05} Q ${cx} ${cy+s*0.22} ${cx+s*0.16} ${cy+s*0.05}" fill="none" stroke="#451a03" stroke-width="2.5"/>`,
+  // 25. caracol espiral
+  (cx, cy, s) => {
+    const path = [];
+    const N = 24;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const ang = t * Math.PI * 3;
+      const rad = s * (0.05 + 0.32 * t);
+      const px = cx + Math.cos(ang) * rad;
+      const py = cy + Math.sin(ang) * rad;
+      path.push((i === 0 ? 'M' : 'L') + ' ' + px.toFixed(2) + ' ' + py.toFixed(2));
+    }
+    return `<path d="${path.join(' ')}" fill="none" stroke="#a16207" stroke-width="3" stroke-linecap="round"/>`;
+  },
+  // 26. ancla
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy-s*0.32}" r="${s*0.06}" fill="none" stroke="#0c4a6e" stroke-width="2.5"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.26}" x2="${cx}" y2="${cy+s*0.30}" stroke="#0c4a6e" stroke-width="2.5"/>` +
+    `<line x1="${cx-s*0.15}" y1="${cy-s*0.12}" x2="${cx+s*0.15}" y2="${cy-s*0.12}" stroke="#0c4a6e" stroke-width="2.5"/>` +
+    `<path d="M ${cx-s*0.32} ${cy+s*0.10} Q ${cx-s*0.32} ${cy+s*0.34} ${cx} ${cy+s*0.34} Q ${cx+s*0.32} ${cy+s*0.34} ${cx+s*0.32} ${cy+s*0.10}" fill="none" stroke="#0c4a6e" stroke-width="2.5"/>`,
+  // 27. llave
+  (cx, cy, s) =>
+    `<circle cx="${cx-s*0.20}" cy="${cy}" r="${s*0.14}" fill="none" stroke="#a16207" stroke-width="3"/>` +
+    `<circle cx="${cx-s*0.20}" cy="${cy}" r="${s*0.05}" fill="#a16207"/>` +
+    `<line x1="${cx-s*0.06}" y1="${cy}" x2="${cx+s*0.34}" y2="${cy}" stroke="#a16207" stroke-width="3"/>` +
+    `<line x1="${cx+s*0.18}" y1="${cy}" x2="${cx+s*0.18}" y2="${cy+s*0.12}" stroke="#a16207" stroke-width="3"/>` +
+    `<line x1="${cx+s*0.30}" y1="${cy}" x2="${cx+s*0.30}" y2="${cy+s*0.12}" stroke="#a16207" stroke-width="3"/>`,
+  // 28. caramelo
+  (cx, cy, s) =>
+    `<ellipse cx="${cx}" cy="${cy}" rx="${s*0.20}" ry="${s*0.12}" fill="#f472b6" stroke="#831843" stroke-width="1.2"/>` +
+    `<polygon points="${cx-s*0.20},${cy} ${cx-s*0.36},${cy-s*0.12} ${cx-s*0.36},${cy+s*0.12}" fill="#f472b6" stroke="#831843" stroke-width="1.2"/>` +
+    `<polygon points="${cx+s*0.20},${cy} ${cx+s*0.36},${cy-s*0.12} ${cx+s*0.36},${cy+s*0.12}" fill="#f472b6" stroke="#831843" stroke-width="1.2"/>` +
+    `<path d="M ${cx-s*0.12} ${cy-s*0.06} L ${cx+s*0.12} ${cy+s*0.06} M ${cx-s*0.12} ${cy+s*0.06} L ${cx+s*0.12} ${cy-s*0.06}" stroke="#831843" stroke-width="1.2"/>`,
+  // 29. fuego
+  (cx, cy, s) =>
+    `<path d="M ${cx} ${cy-s*0.40} Q ${cx-s*0.26} ${cy-s*0.05} ${cx-s*0.22} ${cy+s*0.15} Q ${cx-s*0.18} ${cy+s*0.38} ${cx} ${cy+s*0.34} Q ${cx+s*0.22} ${cy+s*0.32} ${cx+s*0.22} ${cy+s*0.10} Q ${cx+s*0.10} ${cy-s*0.05} ${cx} ${cy-s*0.40} Z" fill="#f97316" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<path d="M ${cx} ${cy-s*0.10} Q ${cx-s*0.10} ${cy+s*0.10} ${cx} ${cy+s*0.26} Q ${cx+s*0.10} ${cy+s*0.10} ${cx} ${cy-s*0.10} Z" fill="#fde047"/>`,
+  // 30. abeja
+  (cx, cy, s) =>
+    `<ellipse cx="${cx}" cy="${cy+s*0.04}" rx="${s*0.26}" ry="${s*0.18}" fill="#fbbf24" stroke="#451a03" stroke-width="1.5"/>` +
+    `<line x1="${cx-s*0.08}" y1="${cy-s*0.13}" x2="${cx-s*0.08}" y2="${cy+s*0.21}" stroke="#451a03" stroke-width="2.5"/>` +
+    `<line x1="${cx+s*0.08}" y1="${cy-s*0.13}" x2="${cx+s*0.08}" y2="${cy+s*0.21}" stroke="#451a03" stroke-width="2.5"/>` +
+    `<ellipse cx="${cx-s*0.10}" cy="${cy-s*0.16}" rx="${s*0.13}" ry="${s*0.07}" fill="#e0e7ff" stroke="#3730a3" stroke-width="1"/>` +
+    `<ellipse cx="${cx+s*0.10}" cy="${cy-s*0.16}" rx="${s*0.13}" ry="${s*0.07}" fill="#e0e7ff" stroke="#3730a3" stroke-width="1"/>`,
+  // 31. mariquita
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy+s*0.05}" r="${s*0.28}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1.5"/>` +
+    `<line x1="${cx}" y1="${cy-s*0.23}" x2="${cx}" y2="${cy+s*0.33}" stroke="#7f1d1d" stroke-width="2.5"/>` +
+    `<circle cx="${cx-s*0.10}" cy="${cy-s*0.04}" r="${s*0.04}" fill="#7f1d1d"/>` +
+    `<circle cx="${cx+s*0.10}" cy="${cy-s*0.04}" r="${s*0.04}" fill="#7f1d1d"/>` +
+    `<circle cx="${cx-s*0.10}" cy="${cy+s*0.14}" r="${s*0.04}" fill="#7f1d1d"/>` +
+    `<circle cx="${cx+s*0.10}" cy="${cy+s*0.14}" r="${s*0.04}" fill="#7f1d1d"/>` +
+    `<circle cx="${cx-s*0.08}" cy="${cy-s*0.22}" r="${s*0.04}" fill="#1f2937"/>` +
+    `<circle cx="${cx+s*0.08}" cy="${cy-s*0.22}" r="${s*0.04}" fill="#1f2937"/>`,
+  // 32. olas
+  (cx, cy, s) => {
+    let out = '';
+    for (let i = -1; i <= 1; i++) {
+      const yy = cy + i * s * 0.18;
+      out += `<path d="M ${cx-s*0.40} ${yy} Q ${cx-s*0.20} ${yy-s*0.14} ${cx} ${yy} T ${cx+s*0.40} ${yy}" fill="none" stroke="#0ea5e9" stroke-width="3.5" stroke-linecap="round"/>`;
+    }
+    return out;
+  },
+  // 33. dona
+  (cx, cy, s) =>
+    `<circle cx="${cx}" cy="${cy}" r="${s*0.34}" fill="#fb923c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="${s*0.12}" fill="white" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.20}" cy="${cy-s*0.10}" r="${s*0.03}" fill="#ef4444"/>` +
+    `<circle cx="${cx+s*0.10}" cy="${cy-s*0.22}" r="${s*0.03}" fill="#3b82f6"/>` +
+    `<circle cx="${cx+s*0.22}" cy="${cy+s*0.06}" r="${s*0.03}" fill="#22c55e"/>` +
+    `<circle cx="${cx-s*0.06}" cy="${cy+s*0.24}" r="${s*0.03}" fill="#a855f7"/>` +
+    `<circle cx="${cx-s*0.22}" cy="${cy+s*0.10}" r="${s*0.03}" fill="#fde047"/>`,
+  // 34. cupcake
+  (cx, cy, s) =>
+    `<path d="M ${cx-s*0.26} ${cy-s*0.02} L ${cx-s*0.18} ${cy+s*0.32} L ${cx+s*0.18} ${cy+s*0.32} L ${cx+s*0.26} ${cy-s*0.02} Z" fill="#a16207" stroke="#451a03" stroke-width="1.5"/>` +
+    `<line x1="${cx-s*0.20}" y1="${cy+s*0.06}" x2="${cx-s*0.16}" y2="${cy+s*0.28}" stroke="#451a03" stroke-width="1"/>` +
+    `<line x1="${cx}" y1="${cy+s*0.02}" x2="${cx}" y2="${cy+s*0.32}" stroke="#451a03" stroke-width="1"/>` +
+    `<line x1="${cx+s*0.20}" y1="${cy+s*0.06}" x2="${cx+s*0.16}" y2="${cy+s*0.28}" stroke="#451a03" stroke-width="1"/>` +
+    `<path d="M ${cx-s*0.26} ${cy-s*0.02} Q ${cx-s*0.22} ${cy-s*0.22} ${cx-s*0.06} ${cy-s*0.16} Q ${cx} ${cy-s*0.32} ${cx+s*0.10} ${cy-s*0.16} Q ${cx+s*0.22} ${cy-s*0.22} ${cx+s*0.26} ${cy-s*0.02} Z" fill="#f472b6" stroke="#831843" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.12}" cy="${cy-s*0.16}" r="${s*0.03}" fill="#fde047"/>` +
+    `<circle cx="${cx+s*0.06}" cy="${cy-s*0.20}" r="${s*0.03}" fill="#22c55e"/>` +
+    `<circle cx="${cx+s*0.16}" cy="${cy-s*0.10}" r="${s*0.03}" fill="#3b82f6"/>`,
+  // 35. estrella fugaz / cometa
+  (cx, cy, s) =>
+    `<path d="M ${cx-s*0.42} ${cy+s*0.32} Q ${cx-s*0.10} ${cy+s*0.22} ${cx+s*0.08} ${cy-s*0.05}" fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"/>` +
+    `<path d="M ${cx+s*0.20} ${cy-s*0.30} L ${cx+s*0.24} ${cy-s*0.12} L ${cx+s*0.42} ${cy-s*0.10} L ${cx+s*0.28} ${cy+s*0.02} L ${cx+s*0.34} ${cy+s*0.20} L ${cx+s*0.20} ${cy+s*0.08} L ${cx+s*0.06} ${cy+s*0.20} L ${cx+s*0.10} ${cy+s*0.02} L ${cx-s*0.06} ${cy-s*0.10} L ${cx+s*0.14} ${cy-s*0.12} Z" fill="#fde047" stroke="#a16207" stroke-width="1.5"/>`,
+  // 36. planeta con anillo
+  (cx, cy, s) =>
+    `<ellipse cx="${cx}" cy="${cy+s*0.06}" rx="${s*0.42}" ry="${s*0.10}" fill="none" stroke="#a16207" stroke-width="2.5" transform="rotate(-15 ${cx} ${cy+s*0.06})"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="${s*0.22}" fill="#fb923c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<ellipse cx="${cx-s*0.06}" cy="${cy-s*0.04}" rx="${s*0.05}" ry="${s*0.03}" fill="#fdba74"/>`,
+  // 37. pizza
+  (cx, cy, s) =>
+    `<path d="M ${cx} ${cy-s*0.36} L ${cx-s*0.32} ${cy+s*0.30} L ${cx+s*0.32} ${cy+s*0.30} Z" fill="#fbbf24" stroke="#a16207" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.06}" cy="${cy+s*0.08}" r="${s*0.05}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1"/>` +
+    `<circle cx="${cx+s*0.12}" cy="${cy+s*0.18}" r="${s*0.05}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1"/>` +
+    `<circle cx="${cx-s*0.14}" cy="${cy+s*0.22}" r="${s*0.05}" fill="#dc2626" stroke="#7f1d1d" stroke-width="1"/>` +
+    `<rect x="${cx-s*0.02}" y="${cy-s*0.05}" width="${s*0.06}" height="${s*0.03}" fill="#22c55e" transform="rotate(30 ${cx} ${cy})"/>`,
+  // 38. bandera
+  (cx, cy, s) =>
+    `<line x1="${cx-s*0.22}" y1="${cy-s*0.35}" x2="${cx-s*0.22}" y2="${cy+s*0.40}" stroke="#451a03" stroke-width="2.5"/>` +
+    `<path d="M ${cx-s*0.22} ${cy-s*0.32} L ${cx+s*0.32} ${cy-s*0.20} L ${cx+s*0.12} ${cy-s*0.05} L ${cx+s*0.32} ${cy+s*0.10} L ${cx-s*0.22} ${cy+s*0.00} Z" fill="#ef4444" stroke="#7f1d1d" stroke-width="1.5"/>`,
+  // 39. cara de gato
+  (cx, cy, s) =>
+    `<polygon points="${cx-s*0.30},${cy-s*0.10} ${cx-s*0.30},${cy-s*0.36} ${cx-s*0.10},${cy-s*0.16}" fill="#fb923c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<polygon points="${cx+s*0.30},${cy-s*0.10} ${cx+s*0.30},${cy-s*0.36} ${cx+s*0.10},${cy-s*0.16}" fill="#fb923c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<circle cx="${cx}" cy="${cy+s*0.05}" r="${s*0.30}" fill="#fb923c" stroke="#7c2d12" stroke-width="1.5"/>` +
+    `<circle cx="${cx-s*0.10}" cy="${cy-s*0.02}" r="${s*0.04}" fill="#1f2937"/>` +
+    `<circle cx="${cx+s*0.10}" cy="${cy-s*0.02}" r="${s*0.04}" fill="#1f2937"/>` +
+    `<polygon points="${cx-s*0.03},${cy+s*0.08} ${cx+s*0.03},${cy+s*0.08} ${cx},${cy+s*0.13}" fill="#1f2937"/>` +
+    `<path d="M ${cx} ${cy+s*0.13} Q ${cx-s*0.04} ${cy+s*0.20} ${cx-s*0.08} ${cy+s*0.18} M ${cx} ${cy+s*0.13} Q ${cx+s*0.04} ${cy+s*0.20} ${cx+s*0.08} ${cy+s*0.18}" fill="none" stroke="#1f2937" stroke-width="1.5"/>`,
+  // 40. taza de café
+  (cx, cy, s) =>
+    `<path d="M ${cx-s*0.24} ${cy-s*0.10} L ${cx-s*0.18} ${cy+s*0.26} L ${cx+s*0.18} ${cy+s*0.26} L ${cx+s*0.24} ${cy-s*0.10} Z" fill="#7c2d12" stroke="#451a03" stroke-width="1.5"/>` +
+    `<rect x="${cx-s*0.24}" y="${cy-s*0.10}" width="${s*0.48}" height="${s*0.05}" fill="#fb923c" stroke="#451a03" stroke-width="1"/>` +
+    `<path d="M ${cx+s*0.24} ${cy-s*0.02} Q ${cx+s*0.42} ${cy+s*0.04} ${cx+s*0.24} ${cy+s*0.16}" fill="none" stroke="#451a03" stroke-width="2.5"/>` +
+    `<path d="M ${cx-s*0.08} ${cy-s*0.26} Q ${cx-s*0.04} ${cy-s*0.36} ${cx-s*0.10} ${cy-s*0.44} M ${cx+s*0.04} ${cy-s*0.26} Q ${cx+s*0.08} ${cy-s*0.36} ${cx+s*0.02} ${cy-s*0.44}" fill="none" stroke="#9aa1a8" stroke-width="2"/>`,
+];
+
+// Asignamos un icono a una porción de las celdas grises. La elección es
+// determinística según las coordenadas, así la versión "solución" y la
+// "imprimible" muestran los mismos iconos en los mismos lugares.
+function assignIcons(result) {
+  result.icons = new Map(); // "r,c" -> idx en ICON_PALETTE
+  const { letters, clues, minR, maxR, minC, maxC } = result;
+  // Hash determinista
+  const hash = (r, c) => ((r * 73856093) ^ (c * 19349663)) >>> 0;
+  for (let r = minR; r <= maxR; r++) {
+    for (let c = minC; c <= maxC; c++) {
+      const k = `${r},${c}`;
+      if (letters.has(k) || clues.has(k)) continue;
+      const h = hash(r, c);
+      // ~35% de los grises llevan icono — suficiente para "decorar" sin saturar
+      if (h % 100 < 35) {
+        result.icons.set(k, h % ICON_PALETTE.length);
+      }
+    }
+  }
+}
+
+function render(result, opts = {}) {
+  const { letters, clues, minR, maxR, minC, maxC, rows, cols } = result;
+  const icons = result.icons || new Map();
+  const showSolution = opts.showSolution !== false;
+  const W = cols * CELL;
+  const H = rows * CELL;
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`;
+  svg += `<rect x="0" y="0" width="${W}" height="${H}" fill="white"/>`;
+
+  // Celdas vacías:
+  //   - si llevan icono, fondo blanco con recuadro (igual que una celda
+  //     de letra, pero ocupada por el icono);
+  //   - si no, bloque gris ("negras" del crucigrama tradicional).
+  for (let r = minR; r <= maxR; r++) {
+    for (let c = minC; c <= maxC; c++) {
+      const k = `${r},${c}`;
+      if (letters.has(k) || clues.has(k)) continue;
+      const x = (c - minC) * CELL;
+      const y = (r - minR) * CELL;
+      const ico = icons.get(k);
+      if (ico !== undefined) {
+        svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="white" stroke="#222" stroke-width="1"/>`;
+        svg += ICON_PALETTE[ico](x + CELL/2, y + CELL/2, CELL * 0.9);
+      } else {
+        svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="#9aa1a8" stroke="#222" stroke-width="1"/>`;
+      }
+    }
+  }
+
+  // Clue cells
+  for (const [k, list] of clues) {
+    const [r, c] = k.split(',').map(Number);
+    const x = (c - minC) * CELL;
+    const y = (r - minR) * CELL;
+    svg += renderClueCell(x, y, list);
+  }
+
+  // Letter cells — siempre dibujamos el recuadro blanco; la letra sólo si
+  // está activada la solución.
+  for (const [k, letter] of letters) {
+    const [r, c] = k.split(',').map(Number);
+    const x = (c - minC) * CELL;
+    const y = (r - minR) * CELL;
+    svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="white" stroke="#222" stroke-width="1"/>`;
+    if (showSolution) {
+      svg += `<text x="${x + CELL/2}" y="${y + CELL*0.72}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="${CELL*0.55}" font-weight="600" fill="#111">${escapeXml(letter)}</text>`;
+    }
+  }
+
+  svg += `</svg>`;
+  return svg;
+}
+
+function renderClueCell(x, y, list) {
+  // list: [{clue, dir}] with up to 2 entries (one H, one V typically)
+  let s = '';
+  const bg = '#e8eef5';
+  const stroke = '#222';
+
+  if (list.length === 1) {
+    const { clue, dir } = list[0];
+    s += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="${bg}" stroke="${stroke}" stroke-width="1"/>`;
+    const fs = clueFontSize(clue);
+    s += `<foreignObject x="${x+2}" y="${y+1}" width="${CELL-4}" height="${CELL-14}">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:system-ui,sans-serif;font-size:${fs}px;line-height:1.05;text-align:center;color:#111;display:flex;align-items:center;justify-content:center;height:100%;padding:1px;word-break:break-word;hyphens:auto;">${escapeXml(clue)}</div>
+    </foreignObject>`;
+    // Arrow
+    if (dir === 'H') {
+      s += arrow(x + CELL - 11, y + CELL - 4, '→');
+    } else {
+      s += arrow(x + CELL - 8, y + CELL - 4, '↓');
+    }
+    return s;
+  }
+
+  // Dos pistas: diagonal del top-left al bottom-right.
+  // Triángulo izquierdo (abajo de la diagonal) → pista vertical con ↓.
+  // Triángulo derecho (arriba de la diagonal)  → pista horizontal con →.
+  const hEntry = list.find(c => c.dir === 'H');
+  const vEntry = list.find(c => c.dir === 'V');
+
+  s += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="${bg}" stroke="${stroke}" stroke-width="1"/>`;
+  s += `<line x1="${x}" y1="${y}" x2="${x+CELL}" y2="${y+CELL}" stroke="${stroke}" stroke-width="1"/>`;
+
+  if (hEntry) {
+    const fs = Math.max(5, clueFontSize(hEntry.clue) - 1);
+    // Triángulo superior-derecho — texto arranca más a la izquierda y
+    // se extiende hasta tocar (o pisar levemente) el borde derecho para
+    // aprovechar todo el ancho del triángulo.
+    s += `<foreignObject x="${x + CELL*0.28}" y="${y+1}" width="${CELL*0.80}" height="${CELL/2 - 2}">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:system-ui,sans-serif;font-size:${fs}px;line-height:1.05;color:#111;padding:1px;word-break:break-word;">${escapeXml(hEntry.clue)}</div>
+    </foreignObject>`;
+    s += arrow(x + CELL - 11, y + CELL/2 - 2, '→');
+  }
+  if (vEntry) {
+    const fs = Math.max(5, clueFontSize(vEntry.clue) - 1);
+    // Triángulo inferior-izquierdo — texto extendido a la derecha,
+    // permitiendo que pise un poco la diagonal.
+    s += `<foreignObject x="${x+1}" y="${y+CELL/2+1}" width="${CELL*0.72 - 1}" height="${CELL/2 - 4}">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:system-ui,sans-serif;font-size:${fs}px;line-height:1.05;color:#111;padding:1px;word-break:break-word;">${escapeXml(vEntry.clue)}</div>
+    </foreignObject>`;
+    s += arrow(x + CELL - 14, y + CELL - 3, '↓');
+  }
+  return s;
+}
+
+function arrow(x, y, ch) {
+  return `<text x="${x}" y="${y}" font-family="system-ui,sans-serif" font-size="11" font-weight="700" fill="#1f6feb">${ch}</text>`;
+}
+
+// ---------- UI wiring ----------
+const $input = document.getElementById('input');
+const $output = document.getElementById('output');
+const $status = document.getElementById('status');
+const $fill = document.getElementById('fill');
+const $rows = document.getElementById('rows');
+const $cols = document.getElementById('cols');
+const $solution = document.getElementById('solution');
+
+// Cacheamos el último resultado para poder alternar Solución/Imprimible
+// sin re-generar.
+let LAST_RESULT = null;
+$solution.addEventListener('change', () => {
+  if (LAST_RESULT) $output.innerHTML = render(LAST_RESULT, { showSolution: $solution.checked });
+});
+
+document.getElementById('example').onclick = () => {
+  $input.value = EXAMPLE;
+};
+
+const BANK_DEFS = {
+  core:  { json: 'data/bank.json',       js: 'data/bank.js',       var: 'CRUCIGRAMA_BANK' },
+  extra: { json: 'data/bank_extra.json', js: 'data/bank_extra.js', var: 'CRUCIGRAMA_BANK_EXTRA' },
+};
+const BANK_CACHE = {};
+function loadBankViaScript(def) {
+  return new Promise((resolve, reject) => {
+    if (window[def.var]) return resolve(window[def.var]);
+    const s = document.createElement('script');
+    s.src = def.js;
+    s.onload = () => window[def.var] ? resolve(window[def.var]) : reject(new Error(def.js + ' no definió ' + def.var));
+    s.onerror = () => reject(new Error('no se puede cargar ' + def.js));
+    document.head.appendChild(s);
+  });
+}
+const BANK_RAW_CACHE = {};
+async function loadBankRaw(name) {
+  if (BANK_RAW_CACHE[name]) return BANK_RAW_CACHE[name];
+  const def = BANK_DEFS[name];
+  BANK_RAW_CACHE[name] = (async () => {
+    try {
+      const r = await fetch(def.json);
+      if (!r.ok) throw new Error('http ' + r.status);
+      return await r.json();
+    } catch (_) {
+      return await loadBankViaScript(def);
+    }
+  })();
+  return BANK_RAW_CACHE[name];
+}
+async function loadBank(name) {
+  if (BANK_CACHE[name]) return BANK_CACHE[name];
+  BANK_CACHE[name] = (async () => {
+    const raw = await loadBankRaw(name);
+    return indexBank(raw);
+  })();
+  return BANK_CACHE[name];
+}
+
+document.getElementById('generate').onclick = async () => {
+  const entries = parseInput($input.value);
+  if (entries.length === 0) {
+    $status.innerHTML = '<span class="warn">Ingresá al menos una línea válida.</span>';
+    $output.innerHTML = '';
+    return;
+  }
+  const targetRows = Math.max(5, Math.min(40, parseInt($rows.value, 10) || 20));
+  const targetCols = Math.max(5, Math.min(40, parseInt($cols.value, 10) || 20));
+
+  let bankMsg = '';
+  $status.innerHTML = 'Generando…';
+  const result = generate(entries, { rows: targetRows, cols: targetCols });
+  if (!result) {
+    $status.innerHTML = '<span class="warn">No se pudo generar.</span>';
+    return;
+  }
+  if ($fill.checked) {
+    try {
+      $status.innerHTML = 'Cargando banco…';
+      const core = await loadBank('core');
+      $status.innerHTML = 'Rellenando huecos…';
+      fillGaps(result, core, { targetRows, targetCols });
+      bankMsg = ` <span class="ok">+${result.bankAdded} del banco.</span>`;
+    } catch (err) {
+      bankMsg = ` <span class="warn">Banco no disponible: ${err.message}.</span>`;
+    }
+  }
+  // Adornar huecos grises con un sub-conjunto de iconos (semilla estable a
+  // partir de coordenadas para que la solución y la versión imprimible
+  // muestren EXACTAMENTE los mismos iconos).
+  assignIcons(result);
+  LAST_RESULT = result;
+
+  $output.innerHTML = render(result, { showSolution: $solution.checked });
+  let msg = `<span class="ok">${result.placed.length} palabra(s) en ${result.rows}×${result.cols}.</span>${bankMsg}`;
+  if (result.skipped.length > 0) {
+    msg += ` <span class="warn">No se cruzaron: ${result.skipped.map(e => e.word).join(', ')}.</span>`;
+  }
+  $status.innerHTML = msg;
+};
+
+document.getElementById('download').onclick = () => {
+  const svg = $output.querySelector('svg');
+  if (!svg) return;
+  const blob = new Blob([svg.outerHTML], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'crucigrama.svg';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// Prefill example
+$input.value = EXAMPLE;
+</script>
+</body>
+</html>
