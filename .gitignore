@@ -1,0 +1,5 @@
+# Dump crudo de Wikcionario (95 MB) — se baja con curl, no entra al repo
+data/raw.jsonl.gz
+
+# Sistema
+.DS_Store
