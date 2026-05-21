@@ -116,11 +116,11 @@
       <div style="margin-top:10px;font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
         <label style="display:flex;align-items:center;gap:6px;">
           Filas
-          <input type="number" id="rows" min="5" max="40" value="20" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+          <input type="number" id="rows" min="5" max="40" value="15" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
         </label>
         <label style="display:flex;align-items:center;gap:6px;">
           Columnas
-          <input type="number" id="cols" min="5" max="40" value="20" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+          <input type="number" id="cols" min="5" max="40" value="15" style="width:56px;padding:4px;border:1px solid #ccc;border-radius:4px;">
         </label>
       </div>
       <div style="margin-top:8px;font-size:13px;">
@@ -1180,7 +1180,7 @@ function render(result, opts = {}) {
       const ico = icons.get(k);
       if (ico !== undefined) {
         svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="white" stroke="#222" stroke-width="1"/>`;
-        svg += ICON_PALETTE[ico](x + CELL/2, y + CELL/2, CELL * 0.9);
+        svg += ICON_PALETTE[ico](x + CELL/2, y + CELL/2, CELL * 0.72);
       } else {
         svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" fill="#9aa1a8" stroke="#222" stroke-width="1"/>`;
       }
@@ -1334,8 +1334,8 @@ document.getElementById('generate').onclick = async () => {
     $output.innerHTML = '';
     return;
   }
-  const targetRows = Math.max(5, Math.min(40, parseInt($rows.value, 10) || 20));
-  const targetCols = Math.max(5, Math.min(40, parseInt($cols.value, 10) || 20));
+  const targetRows = Math.max(5, Math.min(40, parseInt($rows.value, 10) || 15));
+  const targetCols = Math.max(5, Math.min(40, parseInt($cols.value, 10) || 15));
 
   let bankMsg = '';
   $status.innerHTML = 'Generando…';
