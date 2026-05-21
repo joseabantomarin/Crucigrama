@@ -1,6 +1,6 @@
-# Crucigrama
+# Interletras
 
-Generador de crucigramas estilo "sueco" (las pistas van dentro de la grilla con flechas) a partir de una lista de palabras propias y un banco de Wikcionario español.
+Generador de crucigramas en español estilo "sueco" (las pistas van dentro de la grilla con flechas) a partir de una lista de palabras propias y un banco de Wikcionario español.
 
 ## Cómo correrlo
 
