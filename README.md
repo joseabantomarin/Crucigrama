@@ -5,11 +5,13 @@ Generador de crucigramas en español estilo "sueco" (las pistas van dentro de la
 ## Cómo correrlo
 
 ```sh
-python3 -m http.server 8765
-# abrir http://localhost:8765/
+python3 server.py        # http://localhost:8765/
+python3 server.py 9000   # puerto custom
 ```
 
-Funciona también abriendo `index.html` con doble click (`file://`): el banco se carga vía `<script>` tag como fallback cuando `fetch` está bloqueado por el navegador.
+`server.py` sirve los archivos estáticos igual que `http.server`, pero además expone `POST /api/remove-word` para que el admin pueda eliminar palabras del banco de forma permanente (modifica `data/bank.json` y `data/bank.js` en el acto).
+
+Abriendo `index.html` con doble clic (`file://`) también funciona para leer crucigramas; el banco se carga vía `<script>` tag como fallback. El endpoint de eliminación requiere el servidor.
 
 ## Estructura
 

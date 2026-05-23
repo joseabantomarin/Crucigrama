@@ -143,7 +143,13 @@
           <li>Cada palabra reserva una celda‑pista a su izquierda (→) o arriba (↓).</li>
           <li>Si dos pistas caen en la misma celda, se divide en diagonal.</li>
           <li>Con el banco activado, rellena los huecos con palabras de Wikcionario español (~21.000) para que la grilla quede densa estilo "sueco".</li>
+          <li>Doble clic en cualquier celda-pista para eliminar esa palabra del banco.</li>
         </ul>
+      </div>
+      <div id="blacklist-panel" style="margin-top:14px;display:none;">
+        <div style="font-size:12px;color:var(--muted);">
+          <span id="blacklist-count"></span>
+        </div>
       </div>
     </div>
 
@@ -380,6 +386,7 @@ function computeBounds(result) {
 function indexBank(bank) {
   const idx = {}; // length -> [{word, clue}]
   for (const word in bank) {
+    if (BLACKLIST.has(word)) continue;
     const L = word.length;
     if (L < 2 || L > 10) continue;
     (idx[L] ??= []).push({ word, clue: bank[word] });
@@ -883,10 +890,10 @@ function escapeXml(s) {
 
 function clueFontSize(clue) {
   const len = clue.length;
-  if (len <= 8) return 12;
-  if (len <= 14) return 11;
-  if (len <= 22) return 9;
-  return 8;
+  if (len <= 8) return 13;
+  if (len <= 14) return 12;
+  if (len <= 22) return 10;
+  return 9;
 }
 
 // Iconos vectoriales sencillos para decorar algunos huecos grises.
@@ -1277,11 +1284,189 @@ const $rows = document.getElementById('rows');
 const $cols = document.getElementById('cols');
 const $solution = document.getElementById('solution');
 
+// ---------- Blacklist (persiste en localStorage) ----------
+const BLACKLIST_KEY = 'interletras_blacklist';
+const BLACKLIST = new Set(JSON.parse(localStorage.getItem(BLACKLIST_KEY) || '[]'));
+function saveBlacklist() {
+  localStorage.setItem(BLACKLIST_KEY, JSON.stringify([...BLACKLIST]));
+}
+function updateBlacklistUI() {
+  const panel = document.getElementById('blacklist-panel');
+  const count = BLACKLIST.size;
+  panel.style.display = count > 0 ? 'block' : 'none';
+  document.getElementById('blacklist-count').textContent =
+    `${count} palabra${count !== 1 ? 's' : ''} bloqueada${count !== 1 ? 's' : ''} en este navegador.`;
+}
+function blacklistWord(word) {
+  BLACKLIST.add(word);
+  saveBlacklist();
+  updateBlacklistUI();
+  delete BANK_CACHE['core'];
+  // Eliminar permanentemente del banco (requiere server.py o backend compatible)
+  fetch('/api/remove-word', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ word })
+  }).catch(() => {}); // sin backend → solo localStorage
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+    background:#1a1a1a;color:white;padding:10px 20px;border-radius:8px;
+    font-size:13px;font-family:system-ui,sans-serif;z-index:9999;
+    opacity:1;transition:opacity .4s;pointer-events:none;`;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 2200);
+}
+
+let activeTrashBtn = null;
+function hideTrash() {
+  if (activeTrashBtn) { activeTrashBtn.remove(); activeTrashBtn = null; }
+}
+
+function displayResult(result, showSolution) {
+  const { letters, placed, minR, minC } = result;
+
+  const svgHtml = render(result, { showSolution })
+    .replace('<svg ', `<svg style="display:block;max-width:none;" `);
+
+  // Inputs de resolver (sólo en modo en blanco)
+  let inputsHtml = '';
+  if (!showSolution) {
+    for (const [k, letter] of letters) {
+      const [r, c] = k.split(',').map(Number);
+      const left = (c - minC) * CELL;
+      const top  = (r - minR) * CELL;
+      inputsHtml += `<input type="text" maxlength="2"
+        data-key="${k}" data-answer="${letter}"
+        autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+        style="position:absolute;left:${left}px;top:${top}px;width:${CELL}px;height:${CELL}px;
+               text-align:center;font-size:${Math.round(CELL*0.55)}px;font-weight:600;
+               font-family:system-ui,sans-serif;border:none;outline:none;
+               background:transparent;text-transform:uppercase;color:#111;
+               cursor:text;padding:0;box-sizing:border-box;caret-color:#5b2d8f;">`;
+    }
+  }
+
+  // Overlays invisibles sobre cada celda-pista (capturan el doble clic)
+  let overlaysHtml = '';
+  for (const p of placed) {
+    const cr = p.dir === 'H' ? p.row : p.row - 1;
+    const cc = p.dir === 'H' ? p.col - 1 : p.col;
+    const left = (cc - minC) * CELL;
+    const top  = (cr - minR) * CELL;
+    overlaysHtml += `<div class="clue-hit" data-word="${p.word}"
+      style="position:absolute;left:${left}px;top:${top}px;width:${CELL}px;height:${CELL}px;
+             z-index:3;cursor:default;border-radius:4px;"></div>`;
+  }
+
+  let html = `
+    <div style="overflow:auto;margin-bottom:12px;">
+      <div id="cw-wrap" style="position:relative;display:inline-block;line-height:0;">
+        ${svgHtml}${inputsHtml}${overlaysHtml}
+      </div>
+    </div>`;
+
+  if (!showSolution) {
+    html += `<div style="display:flex;gap:8px;">
+      <button id="btn-comprobar" class="primary">COMPROBAR</button>
+      <button id="btn-reset-solve">Borrar respuestas</button>
+    </div>`;
+  }
+
+  $output.innerHTML = html;
+
+  // — Inputs de resolver —
+  if (!showSolution) {
+    for (const inp of $output.querySelectorAll('input[data-key]')) {
+      inp.addEventListener('input', e => {
+        const norm = normalizeWord(e.target.value);
+        e.target.value = norm ? norm[norm.length - 1] : '';
+        e.target.style.color = '#111';
+      });
+    }
+    document.getElementById('btn-comprobar').onclick = () => {
+      for (const inp of $output.querySelectorAll('input[data-key]')) {
+        const userVal = normalizeWord(inp.value);
+        const correct = inp.dataset.answer;
+        if (!userVal) {
+          inp.value = correct;
+          inp.style.color = '#2563eb';
+        } else if (userVal === correct) {
+          inp.style.color = '#111';
+        } else {
+          inp.style.color = '#dc2626';
+        }
+      }
+    };
+    document.getElementById('btn-reset-solve').onclick = () => {
+      for (const inp of $output.querySelectorAll('input[data-key]')) {
+        inp.value = '';
+        inp.style.color = '#111';
+      }
+    };
+  }
+
+  // — Doble clic en celda-pista → mostrar basurero —
+  const wrap = document.getElementById('cw-wrap');
+  for (const overlay of $output.querySelectorAll('.clue-hit')) {
+    overlay.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      hideTrash();
+      const word = overlay.dataset.word;
+      const left = parseFloat(overlay.style.left) + CELL / 2 - 18;
+      const top  = parseFloat(overlay.style.top)  + CELL / 2 - 18;
+
+      const btn = document.createElement('button');
+      btn.id = 'trash-btn';
+      btn.title = `Eliminar "${word}" del banco`;
+      btn.dataset.word = word;
+      btn.style.cssText = `position:absolute;left:${left}px;top:${top}px;
+        width:36px;height:36px;border-radius:50%;border:none;
+        background:#dc2626;color:white;cursor:pointer;z-index:10;
+        box-shadow:0 2px 10px rgba(0,0,0,0.4);
+        display:flex;align-items:center;justify-content:center;padding:0;`;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+        stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14H6L5 6"/>
+        <path d="M10 11v6"/><path d="M14 11v6"/>
+        <path d="M9 6V4h6v2"/>
+      </svg>`;
+
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        blacklistWord(word);
+        hideTrash();
+        for (const ov of $output.querySelectorAll(`.clue-hit[data-word="${CSS.escape(word)}"]`)) {
+          ov.style.background = 'rgba(220,38,38,0.18)';
+        }
+        showToast(`"${word}" eliminada del banco`);
+      });
+
+      wrap.appendChild(btn);
+      activeTrashBtn = btn;
+
+      // Clic fuera → cerrar el basurero
+      setTimeout(() => {
+        document.addEventListener('click', function dismiss(e) {
+          if (!e.target.closest('#trash-btn')) {
+            hideTrash();
+            document.removeEventListener('click', dismiss);
+          }
+        });
+      }, 0);
+    });
+  }
+}
+
 // Cacheamos el último resultado para poder alternar Solución/Imprimible
 // sin re-generar.
 let LAST_RESULT = null;
 $solution.addEventListener('change', () => {
-  if (LAST_RESULT) $output.innerHTML = render(LAST_RESULT, { showSolution: $solution.checked });
+  if (LAST_RESULT) displayResult(LAST_RESULT, $solution.checked);
 });
 
 document.getElementById('example').onclick = () => {
@@ -1361,7 +1546,7 @@ document.getElementById('generate').onclick = async () => {
   assignIcons(result);
   LAST_RESULT = result;
 
-  $output.innerHTML = render(result, { showSolution: $solution.checked });
+  displayResult(result, $solution.checked);
   let msg = `<span class="ok">${result.placed.length} palabra(s) en ${result.rows}×${result.cols}.</span>${bankMsg}`;
   if (result.skipped.length > 0) {
     msg += ` <span class="warn">No se cruzaron: ${result.skipped.map(e => e.word).join(', ')}.</span>`;
@@ -1380,6 +1565,9 @@ document.getElementById('download').onclick = () => {
   a.click();
   URL.revokeObjectURL(url);
 };
+
+// Mostrar el panel si ya hay palabras bloqueadas de sesiones anteriores
+updateBlacklistUI();
 
 // Prefill example
 $input.value = EXAMPLE;
