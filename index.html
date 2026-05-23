@@ -1350,16 +1350,37 @@ function displayResult(result, showSolution) {
     }
   }
 
-  // Overlays invisibles sobre cada celda-pista (capturan el doble clic)
-  let overlaysHtml = '';
+  // Overlays sobre cada celda-pista.
+  // Celda simple → overlay completo.
+  // Celda diagonal (2 pistas) → dos triángulos con clip-path:
+  //   superior-derecho (→ horizontal) y  inferior-izquierdo (↓ vertical).
+  const clueGroups = new Map(); // "cr,cc" → [placed...]
   for (const p of placed) {
     const cr = p.dir === 'H' ? p.row : p.row - 1;
     const cc = p.dir === 'H' ? p.col - 1 : p.col;
+    const k  = `${cr},${cc}`;
+    if (!clueGroups.has(k)) clueGroups.set(k, []);
+    clueGroups.get(k).push(p);
+  }
+  let overlaysHtml = '';
+  for (const [k, words] of clueGroups) {
+    const [cr, cc] = k.split(',').map(Number);
     const left = (cc - minC) * CELL;
     const top  = (cr - minR) * CELL;
-    overlaysHtml += `<div class="clue-hit" data-word="${p.word}"
-      style="position:absolute;left:${left}px;top:${top}px;width:${CELL}px;height:${CELL}px;
-             z-index:3;cursor:default;border-radius:4px;"></div>`;
+    const base = `position:absolute;left:${left}px;top:${top}px;width:${CELL}px;height:${CELL}px;z-index:3;cursor:default;`;
+    if (words.length === 1) {
+      overlaysHtml += `<div class="clue-hit" data-word="${words[0].word}"
+        style="${base}border-radius:4px;"></div>`;
+    } else {
+      const hWord = words.find(p => p.dir === 'H');
+      const vWord = words.find(p => p.dir === 'V');
+      // Triángulo superior-derecho → pista horizontal (→)
+      if (hWord) overlaysHtml += `<div class="clue-hit" data-word="${hWord.word}" data-tri="H"
+        style="${base}clip-path:polygon(0% 0%,100% 0%,100% 100%);"></div>`;
+      // Triángulo inferior-izquierdo → pista vertical (↓)
+      if (vWord) overlaysHtml += `<div class="clue-hit" data-word="${vWord.word}" data-tri="V"
+        style="${base}clip-path:polygon(0% 0%,0% 100%,100% 100%);"></div>`;
+    }
   }
 
   let html = `
@@ -1416,8 +1437,11 @@ function displayResult(result, showSolution) {
       e.stopPropagation();
       hideTrash();
       const word = overlay.dataset.word;
-      const left = parseFloat(overlay.style.left) + CELL / 2 - 18;
-      const top  = parseFloat(overlay.style.top)  + CELL / 2 - 18;
+      const tri  = overlay.dataset.tri; // 'H', 'V' o undefined (celda simple)
+      const cx = parseFloat(overlay.style.left) + (tri === 'H' ? CELL*2/3 : tri === 'V' ? CELL/3 : CELL/2);
+      const cy = parseFloat(overlay.style.top)  + (tri === 'H' ? CELL/3   : tri === 'V' ? CELL*2/3 : CELL/2);
+      const left = cx - 18;
+      const top  = cy - 18;
 
       const btn = document.createElement('button');
       btn.id = 'trash-btn';
